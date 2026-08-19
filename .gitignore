@@ -1,0 +1,30 @@
+node_modules/
+dist/
+build/out/
+
+# Screenshots and photos. These land in the working tree while diagnosing
+# hardware runs — camera captures, phone screenshots, photos of the sender's
+# display — and `git add -A` would otherwise sweep them into a public repo.
+# The project ships no image assets; if one is ever needed, add it with
+# `git add -f`.
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.webp
+*.heic
+*.heif
+*.tif
+*.tiff
+*.mp4
+*.mov
+
+# Not part of the public project — kept local, never published.
+# Personal Claude Code workspace (skills, agent configs):
+.claude/
+# Repository guidance for local AI-assisted work:
+CLAUDE.md
+# Internal design specifications:
+基于动态二维视觉编码的大容量离线数据传输方案.md
+基于自适应二维视觉通信的高速离线数据传输方案 V2.0.md

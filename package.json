@@ -1,0 +1,13 @@
+{
+  "name": "vdtp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Visual Data Transfer Protocol — screen-to-camera optical data channel",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "node build/build.mjs",
+    "test": "node --test test/*.test.js",
+    "serve": "node build/serve.mjs"
+  }
+}

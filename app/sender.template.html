@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VDTP 发送端</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --text:#e6edf3;
+    --muted:#8b949e; --accent:#58a6ff; --ok:#3fb950; --warn:#d29922;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--text);
+    font:15px/1.6 -apple-system,"Segoe UI",system-ui,"Microsoft YaHei",sans-serif;
+  }
+  .wrap { max-width:760px; margin:0 auto; padding:32px 20px 64px; }
+  h1 { font-size:20px; margin:0 0 4px; font-weight:600; }
+  .sub { color:var(--muted); font-size:13px; margin-bottom:28px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:20px; margin-bottom:16px; }
+  .drop { border:1px dashed var(--line); border-radius:8px; padding:32px; text-align:center; cursor:pointer; transition:.15s; }
+  .drop:hover { border-color:var(--accent); background:#1c2430; }
+  .drop input { display:none; }
+  .file { display:flex; justify-content:space-between; gap:16px; align-items:baseline; }
+  .file b { font-weight:600; word-break:break-all; }
+  label { display:block; font-size:13px; color:var(--muted); margin-bottom:6px; }
+  .row { display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; }
+  select {
+    width:100%; background:#0d1117; color:var(--text); border:1px solid var(--line);
+    border-radius:6px; padding:8px 10px; font:inherit; font-size:14px;
+  }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  td { padding:7px 0; border-bottom:1px solid var(--line); }
+  td:last-child { text-align:right; font-variant-numeric:tabular-nums; font-family:ui-monospace,Consolas,monospace; }
+  tr:last-child td { border-bottom:none; }
+  button {
+    width:100%; padding:12px; font:inherit; font-weight:600; border:none; border-radius:6px;
+    background:var(--accent); color:#04101f; cursor:pointer;
+  }
+  button.ghost { background:#21262d; color:var(--text); }
+  button:disabled { background:#21262d; color:var(--muted); cursor:not-allowed; }
+  .actions { display:flex; gap:12px; }
+  .actions #start { flex:1; }
+  .actions #clear { width:auto; flex:0 0 auto; padding:12px 26px; }
+  .note { font-size:13px; color:var(--muted); margin-top:14px; }
+  .note b { color:var(--warn); font-weight:600; }
+  #stage { position:fixed; inset:0; background:#fff; display:none; z-index:10; }
+  #stage.on { display:block; }
+  #canvas { width:100%; height:100%; display:block; }
+  #hud {
+    position:fixed; left:0; right:0; bottom:0; padding:10px 16px; z-index:11;
+    background:rgba(13,17,23,.88); color:var(--text); font-size:13px; display:none;
+    font-family:ui-monospace,Consolas,monospace; justify-content:space-between; gap:20px;
+  }
+  #hud.on { display:flex; }
+  .disclaimer {
+    margin-top:8px; padding-top:16px; border-top:1px solid var(--line);
+    color:var(--muted); font-size:12px; line-height:1.7;
+  }
+  .disclaimer b { color:var(--warn); font-weight:600; }
+  /* Covers the page while a file is over it: dropping outside a handled target
+     makes the browser navigate to the file, which would discard the session. */
+  #dropzone {
+    position:fixed; inset:0; z-index:30; display:none; pointer-events:none;
+    background:rgba(13,17,23,.9); align-items:center; justify-content:center;
+  }
+  #dropzone.on { display:flex; }
+  #dropzone div {
+    border:2px dashed var(--accent); border-radius:12px; padding:40px 56px;
+    color:var(--accent); font-size:17px; font-weight:600;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>VDTP 发送端</h1>
+  <div class="sub">屏幕作为发射器 · 无网络 · 无配对 · 单向传输</div>
+
+  <div class="panel">
+    <label class="drop" id="drop">
+      <input type="file" id="pick">
+      <div id="dropText">点击选择文件，或把文件拖到窗口任意位置</div>
+    </label>
+    <div class="file" id="fileInfo" style="display:none;margin-top:16px">
+      <b id="fname"></b><span id="fsize" style="color:var(--muted);white-space:nowrap"></span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <div>
+        <label for="grid">网格密度</label>
+        <select id="grid">
+          <option value="32">32 × 32（最稳，抗模糊与摩尔纹）</option>
+          <option value="48">48 × 48</option>
+          <option value="64" selected>64 × 64（推荐）</option>
+          <option value="96">96 × 96</option>
+          <option value="128">128 × 128（需拍得更满）</option>
+          <option value="160">160 × 160</option>
+          <option value="192">192 × 192</option>
+          <option value="256">256 × 256（需高分辨率摄像头）</option>
+        </select>
+      </div>
+      <div>
+        <label for="fps">帧率</label>
+        <select id="fps">
+          <option value="5">5 FPS</option>
+          <option value="10" selected>10 FPS</option>
+          <option value="15">15 FPS</option>
+          <option value="20">20 FPS</option>
+          <option value="25">25 FPS</option>
+          <option value="30">30 FPS</option>
+        </select>
+      </div>
+      <div>
+        <label for="levels">调制深度</label>
+        <select id="levels">
+          <option value="2" selected>黑白 1 bit/格</option>
+          <option value="4">四级灰度 2 bit/格（载荷 ×2）</option>
+          <option value="8">彩色 3 bit/格（载荷 ×3，推荐优先于灰度）</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <table>
+      <tr><td>单帧有效载荷</td><td id="mPayload">—</td></tr>
+      <tr><td>源数据块数 K</td><td id="mK">—</td></tr>
+      <tr><td>理论吞吐</td><td id="mRate">—</td></tr>
+      <tr><td>无丢帧最短用时</td><td id="mTime">—</td></tr>
+      <tr><td>压缩</td><td id="mComp">—</td></tr>
+      <tr><td>SHA-256</td><td id="mHash" style="font-size:11px">—</td></tr>
+    </table>
+  </div>
+
+  <div class="actions">
+    <button id="start" disabled>开始播放</button>
+    <button id="clear" class="ghost" disabled>清空</button>
+  </div>
+  <div class="note">
+    发送端持续循环播放编码帧，<b>不知道也不需要知道</b>接收端状态。
+    接收端集齐足够的编码块后自行恢复文件，此时按 Esc 停止即可。
+  </div>
+
+  <footer class="disclaimer">
+    <b>免责声明</b>　本软件仅供学习与技术研究，按「现状」提供、不含任何担保，
+    <b>请勿用于涉密、商业或生产环境</b>。数据以图案在屏幕上明文显示且未加密，
+    任何看到屏幕或拍到画面者均可还原，严禁传输涉密或隐私数据；光学信道不保证在任意条件下
+    都能收全，不得作为关键数据的唯一传输手段。因使用本软件产生的任何损失、泄密或法律后果
+    由使用者自负，使用者须遵守所在国家和地区的法律法规。完整声明与风险项见随附的
+    NOTICE 与 LICENSE（Apache-2.0）。
+  </footer>
+</div>
+
+<div id="dropzone"><div>松开鼠标，加载这个文件</div></div>
+<div id="stage"><canvas id="canvas"></canvas></div>
+<div id="hud"><span id="hudLeft"></span><span id="hudRight">Esc 停止</span></div>
+
+<script>
+/*__VDTP_CORE__*/
+
+const $ = (id) => document.getElementById(id);
+let fileBytes = null, fileName = '', sender = null, layout = null, plan = null;
+let ecc = true, levels = 2, compressedBytes = null;
+let loadToken = 0;
+
+const DROP_HINT = '点击选择文件，或把文件拖到窗口任意位置';
+
+/** Data matrices between metadata matrices. */
+const METADATA_EVERY = 6;
+
+const fmtBytes = (n) =>
+  n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(2) + ' MB';
+
+function refresh() {
+  const n = +$('grid').value, fps = +$('fps').value;
+  ecc = true;
+  levels = +$('levels').value;
+  layout = new MatrixLayout(n, levels);
+  // A matrix carries one independent frame per band, so throughput is the
+  // whole plan's payload — and a tear costs one band instead of the capture.
+  plan = planBands(layout);
+  const perMatrix = ecc ? plan.payload : plan.bands.reduce((a, b) => a + b.bytes - OVERHEAD, 0);
+  $('mPayload').textContent =
+    `${fmtBytes(perMatrix)} / 帧（${plan.count} 条带 · ${Math.log2(levels)} bit/格）`;
+  $('mRate').textContent = fmtBytes(perMatrix * fps) + '/s';
+
+  if (!fileBytes) {
+    sender = null;
+    $('mK').textContent = $('mTime').textContent = $('mHash').textContent = $('mComp').textContent = '—';
+    $('start').disabled = true;
+    $('clear').disabled = true;
+    return;
+  }
+  sender = new VdtpSender(fileBytes, {
+    fileName, blockSize: plan.frameBudget, compressed: compressedBytes,
+  });
+  // Every sender carries a fresh session id, so the fountain starts over with
+  // it: seeds from the old session are a different transfer as far as the
+  // receiver is concerned. Within one session the seed only ever climbs.
+  seed = 1;
+  const K = sender.encoder.K;
+  $('mK').textContent = K.toLocaleString();
+  // Metadata takes a whole matrix to itself, so it costs airtime too.
+  const matrices = Math.ceil(K / plan.count) * (1 + 1 / METADATA_EVERY);
+  $('mTime').textContent = (matrices / fps).toFixed(1) + ' s';
+  $('mComp').textContent = sender.metadata.compression === 'deflate'
+    ? `deflate · ${fmtBytes(sender.metadata.csize)}`
+    : '不压缩（无收益）';
+  $('mHash').textContent = sender.metadata.sha256;
+  $('start').disabled = false;
+  $('clear').disabled = false;
+}
+
+/** Back to the state the page opens in, with no file and nothing selected. */
+function clearAll() {
+  loadToken++;               // strand any load still reading or compressing
+  fileBytes = null; fileName = ''; compressedBytes = null; sender = null;
+  seed = 1;
+  $('pick').value = '';      // or re-picking the same file fires no change event
+  $('fileInfo').style.display = 'none';
+  $('fname').textContent = '';
+  $('fsize').textContent = '';
+  $('dropText').textContent = DROP_HINT;
+  $('grid').value = '64';
+  $('fps').value = '10';
+  $('levels').value = '2';
+  refresh();
+}
+
+/**
+ * Deflate, but only keep it if it helped. An already-compressed file gains
+ * nothing, and sending a larger stream to discover that would be worse than
+ * not trying. Runs once, before playback, so nothing downstream is async.
+ */
+async function compress(bytes) {
+  if (typeof CompressionStream !== 'function') return null;
+  try {
+    const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+    const out = new Uint8Array(await new Response(stream).arrayBuffer());
+    return out.length < bytes.length ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadFile(file) {
+  if (!file) return;
+  // Reading and compressing are asynchronous, so a load that has been replaced
+  // or cleared in the meantime must not come back and install its bytes.
+  const token = ++loadToken;
+  fileName = file.name;
+  $('fname').textContent = file.name;
+  $('fsize').textContent = fmtBytes(file.size);
+  $('fileInfo').style.display = 'flex';
+  $('dropText').textContent = '重新选择文件，或再拖一个进来';
+  $('start').disabled = true;
+  $('clear').disabled = false;
+  file.arrayBuffer().then(async (buf) => {
+    if (token !== loadToken) return;
+    const bytes = new Uint8Array(buf);
+    const compressed = await compress(bytes);
+    if (token !== loadToken) return;
+    fileBytes = bytes;
+    compressedBytes = compressed;
+    if (compressedBytes) {
+      $('fsize').textContent =
+        `${fmtBytes(file.size)} → ${fmtBytes(compressedBytes.length)} ` +
+        `(${(file.size / compressedBytes.length).toFixed(2)}x)`;
+    }
+    refresh();
+  });
+}
+
+$('pick').addEventListener('change', (e) => loadFile(e.target.files[0]));
+$('clear').addEventListener('click', clearAll);
+for (const id of ['grid', 'fps', 'levels']) $(id).addEventListener('change', refresh);
+
+let playing = false, bootstrap = true, begin = () => {};
+// Outside play(), so stopping and starting again continues the fountain. A
+// receiver rejects a seed it has already accepted, so restarting from 1 would
+// hand it nothing but duplicates and freeze its progress where it stood.
+let seed = 1;
+function play() {
+  if (!sender) return;
+  const canvas = $('canvas'), ctx = canvas.getContext('2d', { alpha: false });
+  const interval = 1000 / +$('fps').value;
+  const mirror = false;
+  bootstrap = true;
+
+  $('stage').classList.add('on');
+  $('hud').classList.add('on');
+  // No automatic full screen: the frame has to be put on whichever display the
+  // camera is aimed at, and that means leaving the window movable. F key opts in.
+  playing = true;
+
+  let last = 0, sent = 0;
+  let started = performance.now();
+  let sinceMeta = 0, frameId = 0;
+
+  /**
+   * Hold on the metadata frame until the operator confirms the receiver read
+   * it. Same density as the data on purpose — an easier bootstrap would prove
+   * nothing about whether this shot can carry the transfer.
+   */
+  begin = () => {
+    if (!bootstrap) return;
+    bootstrap = false;
+    // The seed is not reset. A receiver rejects a seed it already accepted, so
+    // replaying from 1 after a restart hands it nothing but duplicates and
+    // freezes its progress — precisely what happens when a long transfer looks
+    // stuck and gets restarted. Continuing lets it keep what it had.
+    sinceMeta = 0; frameId = 0;
+    sent = 0;
+    started = performance.now();
+  };
+
+  function tick(now) {
+    if (!playing) return;
+    requestAnimationFrame(tick);
+    if (now - last < interval) return;
+    last = now;
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+
+    // Metadata gets a matrix to itself, unbanded: held static it cannot be
+    // torn, and a band's budget is below what the metadata needs.
+    let cells;
+    if (bootstrap || sinceMeta === 0 || sinceMeta > METADATA_EVERY) {
+      if (!bootstrap) sinceMeta = 1;
+      cells = encodeFrameCells(layout, sender.metadataFrame(frameId++), ecc);
+    } else {
+      sinceMeta++;
+      const batch = [];
+      for (let i = 0; i < plan.count; i++) batch.push(sender.dataFrame(seed++));
+      cells = encodeFrameBands(layout, plan, batch, ecc);
+    }
+
+    ctx.save();
+    if (mirror) { ctx.translate(w, 0); ctx.scale(-1, 1); }
+    drawCells(ctx, cells, layout.n, w, h, { levels });
+    ctx.restore();
+
+    if (bootstrap) {
+      $('hudLeft').textContent =
+        `握手帧 · ${layout.n}×${layout.n} · ${levels === 8 ? '彩色' : levels + '级'} · ` +
+        `接收端读出文件名后，按 空格 或点击开始传输`;
+      $('hudRight').textContent = 'F 全屏 · Esc 退出';
+      return;
+    }
+
+    sent++;
+    const secs = (now - started) / 1000;
+    const delivered = (seed - 1) * sender.encoder.blockSize;
+    $('hudLeft').textContent =
+      `已播 ${sent} 帧 · ${secs.toFixed(0)}s · ${fmtBytes(delivered / Math.max(secs, .001))}/s · ` +
+      `K=${sender.encoder.K} · 已覆盖 ${Math.min(100, Math.round((seed - 1) / sender.encoder.K * 100))}%`;
+  }
+  requestAnimationFrame(tick);
+}
+
+function stop() {
+  playing = false;
+  $('stage').classList.remove('on');
+  $('hud').classList.remove('on');
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+}
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  else if (document.documentElement.requestFullscreen) {
+    document.documentElement.requestFullscreen().catch(() => {});
+  }
+}
+
+/*
+ * Drag and drop over the whole window, not just the box.
+ *
+ * The default action for a file dropped anywhere a page does not handle is for
+ * the browser to navigate to it, which unloads the page — a near miss would
+ * therefore throw away the loaded file and, mid-playback, the session itself.
+ * So dragover and drop are cancelled everywhere unconditionally, and only the
+ * decision of what to do with the file depends on the state.
+ *
+ * dragenter/dragleave are counted rather than paired: moving between elements
+ * fires a leave for the old one after the enter for the new, so a single flag
+ * flickers off every time the pointer crosses a child boundary.
+ */
+let dragDepth = 0;
+
+function hasFiles(e) {
+  const types = e.dataTransfer && e.dataTransfer.types;
+  return !!types && Array.prototype.indexOf.call(types, 'Files') >= 0;
+}
+
+function endDrag() {
+  dragDepth = 0;
+  $('dropzone').classList.remove('on');
+}
+
+addEventListener('dragenter', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth++;
+  if (!playing) $('dropzone').classList.add('on');
+});
+addEventListener('dragover', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = playing ? 'none' : 'copy';
+});
+addEventListener('dragleave', (e) => {
+  if (!hasFiles(e)) return;
+  if (dragDepth > 0 && --dragDepth === 0) $('dropzone').classList.remove('on');
+});
+addEventListener('dragend', endDrag);
+addEventListener('drop', (e) => {
+  e.preventDefault();
+  endDrag();
+  if (playing) return;   // a drop must not disturb a transfer in flight
+  const files = e.dataTransfer && e.dataTransfer.files;
+  if (files && files.length) loadFile(files[0]);
+});
+
+$('start').addEventListener('click', play);
+// Click starts the transfer; it never stops one, so a stray tap cannot
+// interrupt a run half way through. Esc is the way out.
+$('stage').addEventListener('click', () => begin());
+addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') stop();
+  else if (!playing) return;
+  else if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); begin(); }
+  else if (e.key === 'f' || e.key === 'F' || e.key === 'F11') { e.preventDefault(); toggleFullscreen(); }
+});
+
+refresh();
+</script>
+</body>
+</html>

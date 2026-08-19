@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>VDTP 接收端</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --text:#e6edf3;
+    --muted:#8b949e; --accent:#58a6ff; --ok:#3fb950; --bad:#f85149; --warn:#d29922;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--text);
+    font:15px/1.6 -apple-system,"Segoe UI",system-ui,"Microsoft YaHei",sans-serif;
+    -webkit-text-size-adjust:100%;
+  }
+  .wrap { max-width:560px; margin:0 auto; padding:20px 16px 48px; }
+  h1 { font-size:19px; margin:0 0 4px; font-weight:600; }
+  .sub { color:var(--muted); font-size:13px; margin-bottom:20px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:14px; }
+  #view { position:relative; background:#000; border-radius:8px; overflow:hidden; aspect-ratio:4/3; margin-bottom:14px; }
+  #video { width:100%; height:100%; object-fit:contain; display:block; background:#000; }
+  #overlay { position:absolute; inset:0; width:100%; height:100%; }
+  #lock {
+    position:absolute; top:8px; left:8px; padding:3px 8px; border-radius:4px; font-size:12px;
+    font-family:ui-monospace,Consolas,monospace; background:rgba(0,0,0,.6);
+  }
+  .bar { height:8px; background:#21262d; border-radius:4px; overflow:hidden; margin:6px 0 12px; }
+  .bar span { display:block; height:100%; width:0; background:var(--accent); transition:width .2s; }
+  .bar.done span { background:var(--ok); }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  td { padding:6px 0; border-bottom:1px solid var(--line); }
+  td:last-child { text-align:right; font-variant-numeric:tabular-nums; font-family:ui-monospace,Consolas,monospace; }
+  tr:last-child td { border-bottom:none; }
+  button {
+    width:100%; padding:13px; font:inherit; font-weight:600; border:none; border-radius:6px;
+    background:var(--accent); color:#04101f; cursor:pointer;
+  }
+  button.ghost { background:#21262d; color:var(--text); }
+  button:disabled { background:#21262d; color:var(--muted); }
+  button.mini {
+    width:auto; padding:5px 10px; font-size:12px; border:1px solid var(--line);
+    background:rgba(13,17,23,.72); color:var(--text);
+  }
+  #backLive { position:absolute; top:8px; right:8px; }
+  .reset { margin-top:14px; }
+  .alert { border-left:3px solid var(--warn); background:#1c1a12; padding:12px 14px; border-radius:0 6px 6px 0; font-size:13px; }
+  .alert.bad { border-color:var(--bad); background:#1f1315; }
+  .alert.ok { border-color:var(--ok); background:#121c14; }
+  .alert b { display:block; margin-bottom:4px; }
+  code { font-family:ui-monospace,Consolas,monospace; font-size:12px; background:#0d1117; padding:1px 5px; border-radius:3px; }
+  .hash { font-family:ui-monospace,Consolas,monospace; font-size:11px; word-break:break-all; color:var(--muted); }
+  .stack { display:flex; flex-direction:column; gap:10px; }
+  .disclaimer {
+    margin-top:20px; padding-top:14px; border-top:1px solid var(--line);
+    color:var(--muted); font-size:12px; line-height:1.7;
+  }
+  .disclaimer b { color:var(--warn); font-weight:600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>VDTP 接收端</h1>
+  <div class="sub">摄像头作为接收器 · 无需联网 · 丢帧自动恢复</div>
+
+  <div id="insecure" class="panel" style="display:none">
+    <div class="alert bad">
+      <b>无法访问摄像头</b>
+      浏览器只在安全上下文中开放摄像头。用 <code>file://</code> 直接双击打开本页是<b>拿不到摄像头</b>的。
+      请通过 <code>https://</code> 访问，或在本机用 <code>http://localhost</code> 提供本页。
+    </div>
+  </div>
+
+  <div id="view" style="display:none">
+    <video id="video" playsinline muted></video>
+    <canvas id="overlay"></canvas>
+    <div id="lock">未锁定</div>
+    <button class="mini" id="backLive">返回起始页</button>
+  </div>
+
+  <div class="panel" id="startPanel">
+    <div class="stack">
+      <div>
+        <label for="mode" style="font-size:13px;color:var(--muted);display:block;margin-bottom:6px">处理模式</label>
+        <select id="mode" style="width:100%;background:#0d1117;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:8px 10px;font:inherit">
+          <option value="balanced" selected>平衡 — 15 fps / 1600px（推荐）</option>
+          <option value="saver">省电 — 8 fps / 1080px（手机发热时用）</option>
+          <option value="max">最高质量 — 相机原生帧率与分辨率</option>
+        </select>
+      </div>
+      <button id="start">开启摄像头并接收</button>
+      <div style="font-size:13px;color:var(--muted)">
+        将摄像头正对发送端屏幕，让整个图案连同四周白边完整入画。
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="progressPanel" style="display:none">
+    <div style="display:flex;justify-content:space-between;font-size:13px">
+      <span id="stateText">等待元数据…</span><span id="pct">0%</span>
+    </div>
+    <div class="bar" id="bar"><span id="fill"></span></div>
+    <table>
+      <tr><td>文件</td><td id="sName">—</td></tr>
+      <tr><td>大小</td><td id="sSize">—</td></tr>
+      <tr><td>已收符号 / 约需</td><td id="sSymbols">—</td></tr>
+      <tr><td>已恢复块（末尾才涨）</td><td id="sBlocks">—</td></tr>
+      <tr><td>有效 / 重复 / 损坏</td><td id="sFrames">0 / 0 / 0</td></tr>
+      <tr><td>有效帧率 / 预计剩余</td><td id="sGood">—</td></tr>
+      <tr><td>处理速率 / 跟踪命中</td><td id="sFps">—</td></tr>
+      <tr><td>相机分辨率 / 帧率</td><td id="dCam">—</td></tr>
+      <tr><td>定位候选 / 已采样</td><td id="dQuads">—</td></tr>
+      <tr><td>结构误差（需 ≤20%）</td><td id="dErr">—</td></tr>
+      <tr><td>结构对但载荷坏</td><td id="dTear">—</td></tr>
+      <tr><td>信号裕度</td><td id="dMargin">—</td></tr>
+      <tr><td>四级电平 / 最小间隔</td><td id="dLevels">—</td></tr>
+      <tr><td>图案边长 / 每模块像素</td><td id="dPpm">—</td></tr>
+    </table>
+    <button class="ghost reset" id="backProgress">停止接收并返回起始页</button>
+  </div>
+
+  <div class="panel" id="donePanel" style="display:none">
+    <div class="alert ok" id="doneAlert"><b>传输完成</b><span id="doneText"></span></div>
+    <div class="hash" id="doneHash" style="margin:10px 0"></div>
+    <div class="stack">
+      <button id="save">保存文件</button>
+      <button class="ghost" id="again">返回起始页 · 再接收一个</button>
+    </div>
+  </div>
+
+  <footer class="disclaimer">
+    <b>免责声明</b>　本软件仅供学习与技术研究，按「现状」提供、不含任何担保，
+    <b>请勿用于涉密、商业或生产环境</b>。数据以图案在屏幕上明文显示且未加密，
+    任何看到画面者均可还原；光学信道不保证在任意条件下都能收全。保存的文件不含病毒扫描，
+    请自行查杀。因使用本软件产生的任何损失、泄密或法律后果由使用者自负，使用者须遵守所在
+    国家和地区的法律法规。完整声明与风险项见随附的 NOTICE 与 LICENSE（Apache-2.0）。
+  </footer>
+</div>
+
+<script>
+/*__VDTP_CORE__*/
+
+const $ = (id) => document.getElementById(id);
+const fmtBytes = (n) =>
+  n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(2) + ' MB';
+
+if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+  $('insecure').style.display = 'block';
+  $('startPanel').style.display = 'none';
+}
+
+let stream = null, running = false, receiver = null, scanner = null, result = null;
+let generation = 0, saved = false, opening = false;
+
+/**
+ * Processing modes.
+ *
+ * The receiver was running the whole pipeline at the camera's native rate and
+ * resolution — up to 60 fps over 8 MP — while the sender displays 10 to 20
+ * frames a second. Three to six of every four captures were therefore the same
+ * displayed frame, decoding to a duplicate symbol that gets discarded. The
+ * phone was heating up doing arithmetic whose results were thrown away.
+ *
+ * Processing at roughly twice the sender's rate loses nothing: a displayed
+ * frame only needs one clean capture. Resolution is capped for the same reason
+ * — past about 8 camera pixels per module, more pixels buy no accuracy.
+ *
+ * `max` keeps the old behaviour, so tuning experiments (four-level modulation,
+ * marginal framing) are never limited by a power decision.
+ */
+const MODES = {
+  saver:    { fps: 8,  maxSide: 1080 },
+  balanced: { fps: 15, maxSide: 1600 },
+  max:      { fps: 0,  maxSide: 0 },   // 0 = uncapped
+};
+let mode = MODES.balanced;
+let lastProcessed = 0;
+
+/**
+ * Open the camera, preferring a genuinely square capture mode.
+ *
+ * The frame is square, so the only dimension that buys pixels per module is
+ * the *shorter* one: a 16:9 mode spends most of its pixels on an axis the
+ * decode cannot use. A square mode at the same short side is strictly better
+ * to search, and one at a larger short side is better outright.
+ *
+ * `resizeMode: 'none'` keeps the browser from cropping or rescaling whatever
+ * we end up with, and a minimum frame rate is really a maximum exposure time —
+ * a sensor cannot integrate longer than the frame interval, and any exposure
+ * spanning a screen update records two different frames blended together.
+ */
+async function openCamera() {
+  const base = {
+    facingMode: { ideal: 'environment' },
+    frameRate: { min: 24, ideal: 60 },
+    resizeMode: 'none',
+  };
+
+  for (const side of [1440, 1080, 960, 720]) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        video: { ...base, width: { exact: side }, height: { exact: side } },
+        audio: false,
+      });
+    } catch { /* this device does not offer that square mode */ }
+  }
+
+  // No square mode: take the largest the sensor has and leave it uncropped.
+  return await navigator.mediaDevices.getUserMedia({
+    video: {
+      ...base,
+      width: { ideal: 3840 }, height: { ideal: 2160 },
+      aspectRatio: { ideal: 1 },
+    },
+    audio: false,
+  });
+}
+const work = document.createElement('canvas');
+const wctx = work.getContext('2d', { willReadFrequently: true });
+
+async function start() {
+  // Opening the camera is asynchronous and the button stays live until it
+  // returns, so without this a second press opens a second stream and leaks
+  // the first — the torch stays on with nothing reading it.
+  if (running || opening) return;
+  opening = true;
+  try {
+    stream = await openCamera();
+    } catch (err) {
+    $('insecure').style.display = 'block';
+    $('insecure').querySelector('.alert').innerHTML =
+      '<b>摄像头启动失败</b>' + (err && err.name ? err.name + '：' : '') + (err && err.message || '未知错误');
+    return;
+  } finally {
+    opening = false;
+  }
+
+  const video = $('video');
+  video.srcObject = stream;
+  await video.play();
+
+  mode = MODES[$('mode').value] || MODES.balanced;
+  lastProcessed = 0;
+  receiver = new VdtpReceiver();
+  scanner = new Scanner();
+  result = null;
+  saved = false;
+  resetCounters();
+  clearReadouts();
+  $('view').style.display = 'block';
+  $('startPanel').style.display = 'none';
+  $('donePanel').style.display = 'none';
+  $('progressPanel').style.display = 'block';
+  $('bar').classList.remove('done');
+  $('save').disabled = false;
+  running = true;
+  const gen = ++generation;
+  schedule(gen);
+}
+
+function stopCamera() {
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null;
+  const video = $('video');
+  video.pause();
+  video.srcObject = null;
+}
+
+function resetCounters() {
+  const now = performance.now();
+  frames = 0; fps = 0; lastHit = null;
+  fpsMark = now;
+  goodFps = 0; goodBase = 0; goodMark = now;
+  blockRate = 0; blockBase = 0; blockMark = now;
+}
+
+function clearReadouts() {
+  for (const id of ['sName', 'sSize', 'sSymbols', 'sBlocks', 'sGood', 'sFps',
+                    'dCam', 'dQuads', 'dErr', 'dTear', 'dMargin', 'dLevels', 'dPpm']) {
+    $(id).textContent = '—';
+  }
+  $('sFrames').textContent = '0 / 0 / 0';
+  $('stateText').textContent = '等待元数据…';
+  $('pct').textContent = '0%';
+  $('fill').style.width = '0%';
+  $('lock').textContent = '未锁定';
+  const c = $('overlay');
+  c.getContext('2d').clearRect(0, 0, c.width, c.height);
+}
+
+/**
+ * Back to the start page from wherever we are, with nothing carried over.
+ *
+ * Everything a transfer accumulates lives in the receiver, the scanner and the
+ * rate counters, so all three are dropped rather than reused: a session that
+ * kept the old decoder would reject the next sender's frames as foreign and
+ * sit at whatever progress the abandoned one had reached.
+ */
+function resetToStart() {
+  running = false;
+  generation++;
+  stopCamera();
+  receiver = null; scanner = null; result = null; saved = false;
+  lastProcessed = 0;
+  resetCounters();
+  clearReadouts();
+  $('view').style.display = 'none';
+  $('progressPanel').style.display = 'none';
+  $('donePanel').style.display = 'none';
+  $('startPanel').style.display = 'block';
+  $('bar').classList.remove('done');
+}
+
+/**
+ * Drive from the camera's own frame callback where available: it fires once per
+ * captured frame rather than once per display repaint, so the receiver runs at
+ * whatever rate the sensor delivers instead of a rate the page picked.
+ */
+function schedule(gen) {
+  const video = $('video');
+  const run = () => loop(gen);
+  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(run);
+  else requestAnimationFrame(run);
+}
+
+// Two different rates, and conflating them is misleading: the loop rate counts
+// every camera frame chewed through, while the effective rate counts unique
+// fountain symbols actually accepted. A link can run the loop at 30/s, lose a
+// third of its captures to screen updates, and still be progressing fine.
+let frames = 0, fpsMark = performance.now(), fps = 0, lastHit = null;
+let goodMark = performance.now(), goodBase = 0, goodFps = 0;
+let blockMark = performance.now(), blockBase = 0, blockRate = 0;
+
+/** Longest edge of a quad, in working-image pixels. */
+function quadSpan(corners) {
+  let max = 0;
+  for (let i = 0; i < 4; i++) {
+    const [ax, ay] = corners[i], [bx, by] = corners[(i + 1) % 4];
+    max = Math.max(max, Math.hypot(bx - ax, by - ay));
+  }
+  return max;
+}
+
+function loop(gen) {
+  if (!running || gen !== generation) return;
+  const video = $('video');
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw) { schedule(gen); return; }
+
+  // Skip captures we do not need. The callback still fires per camera frame;
+  // returning here costs nothing next to a readback and a full-frame convert.
+  const now0 = performance.now();
+  if (mode.fps && now0 - lastProcessed < 1000 / mode.fps) { schedule(gen); return; }
+  lastProcessed = now0;
+
+  const shrink = mode.maxSide ? Math.min(1, mode.maxSide / Math.max(vw, vh)) : 1;
+  const w = Math.round(vw * shrink), h = Math.round(vh * shrink);
+
+  // Native resolution, 1:1, no crop and no rescale. Pixels per module is what
+  // decides whether a frame is readable at all, so nothing is thrown away here;
+  // the Scanner subsamples internally for *locating* the frame only, and every
+  // decoded bit is still sampled from this full-resolution image.
+  if (work.width !== w || work.height !== h) { work.width = w; work.height = h; }
+  wctx.drawImage(video, 0, 0, w, h);
+
+  const frame = wctx.getImageData(0, 0, w, h).data;
+  const gray = toBrightness(frame, w, h);
+  const hit = scanner.scan(gray, w, h, frame);
+  lastHit = hit;
+  drawOverlay(hit, w, h);
+
+  // Every band, not just the first: a capture carries one independent frame
+  // per band, and a tear costs only the band that straddles it. Bytes go in
+  // exactly as recovered from the screen — never re-serialised locally, or the
+  // frame CRC would be validating our own arithmetic.
+  if (hit) for (const f of hit.frames) receiver.onFrame(f.bytes);
+
+  frames++;
+  const now = performance.now();
+  if (now - fpsMark > 500) { fps = frames * 1000 / (now - fpsMark); frames = 0; fpsMark = now; }
+  if (now - goodMark > 2000) {
+    goodFps = (receiver.stats.valid - goodBase) * 1000 / (now - goodMark);
+    goodBase = receiver.stats.valid; goodMark = now;
+  }
+  if (receiver.decoder && now - blockMark > 2000) {
+    blockRate = (receiver.decoder.decodedCount - blockBase) * 1000 / (now - blockMark);
+    blockBase = receiver.decoder.decodedCount; blockMark = now;
+  }
+
+  render();
+  if (receiver.complete) { finish(); return; }
+  schedule(gen);
+}
+
+function drawOverlay(hit, w, h) {
+  const c = $('overlay'), video = $('video');
+  if (c.width !== video.clientWidth || c.height !== video.clientHeight) {
+    c.width = video.clientWidth; c.height = video.clientHeight;
+  }
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+  $('lock').textContent = scanner.locked ? `已锁定 ${scanner.locked}×${scanner.locked}` : '搜索中…';
+  if (!hit) return;
+
+  // object-fit: contain — mirror that mapping so the outline lands on the frame.
+  const s = Math.min(c.width / w, c.height / h);
+  const ox = (c.width - w * s) / 2, oy = (c.height - h * s) / 2;
+  ctx.strokeStyle = '#3fb950';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  hit.corners.forEach(([x, y], i) => {
+    const px = x * s + ox, py = y * s + oy;
+    i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+  });
+  ctx.closePath();
+  ctx.stroke();
+}
+
+function render() {
+  const meta = receiver.metadata;
+  $('stateText').textContent = meta ? '接收中'
+    : receiver.stats.buffered ? `等待元数据…（已缓存 ${receiver.stats.buffered} 个数据帧）`
+    : '等待元数据…';
+  if (meta) {
+    $('sName').textContent = meta.name;
+    $('sSize').textContent = fmtBytes(meta.size);
+    // Two different things, and only the first is a progress signal: peeling
+    // recovers blocks in a rush at the end, so the block count sits near zero
+    // for most of a transfer even when everything is working.
+    const needed = Math.ceil(meta.k * 1.15);
+    $('sSymbols').textContent = `${receiver.stats.valid} / ${needed}`;
+    $('sBlocks').textContent = `${receiver.decoder.decodedCount} / ${meta.k}`;
+  }
+  const p = Math.round(receiver.progress * 100);
+  $('pct').textContent = p + '%';
+  $('fill').style.width = p + '%';
+  const s = receiver.stats;
+  $('sFrames').textContent = `${s.valid} / ${s.duplicate} / ${s.corrupt}`;
+
+  const total = scanner.tracked + scanner.searched;
+  $('sFps').textContent = `${fps.toFixed(0)} fps` +
+    (total ? ` / ${Math.round(scanner.tracked / total * 100)}%` : '');
+
+  // What the operator actually needs: is it progressing, and for how long.
+  const remaining = receiver.remaining;
+  const eta = blockRate > 0 && remaining !== null ? remaining / blockRate : null;
+  $('sGood').textContent = `${goodFps.toFixed(1)} 帧/秒` +
+    (eta === null ? ''
+      : eta > 90 ? ` / 约 ${Math.round(eta / 60)} 分`
+      : ` / 约 ${Math.round(eta)} 秒`);
+
+  // Without these three rows a failure is indistinguishable from "nothing is
+  // happening", which is exactly how the first hardware run went.
+  const d = scanner.diag;
+  const v = $('video');
+  $('dCam').textContent = v.videoWidth
+    ? `${v.videoWidth}×${v.videoHeight}` +
+      (work.width !== v.videoWidth ? ` → 处理 ${work.width}×${work.height}` : '') +
+      ` · 步长 ${d.stride}×`
+    : '—';
+  $('dQuads').textContent = `${d.quads} / ${d.sampled}`;
+  $('dErr').textContent = d.bestError === null ? '—' : `${(d.bestError * 100).toFixed(1)}%`;
+
+  // Structure matched but the payload did not: the frame was found, and the
+  // capture spanned a screen update. Rings survive that, payload does not.
+  // Losing captures to screen updates is normal and only worth acting on when
+  // it is actually holding the transfer back — a third of captures lost while
+  // the effective rate stays healthy costs nothing worth chasing.
+  const t = scanner.totals;
+  const seen = t.decoded + t.crcFails;
+  $('dTear').textContent = seen
+    ? `${t.crcFails} / ${seen}（${Math.round(t.crcFails / seen * 100)}%）` +
+      (t.corrected ? ` 纠错救回 ${t.corrected}` : '')
+    : '—';
+
+  // Same symptom, opposite remedies. Crisp bits that fail the CRC came from a
+  // capture spanning a screen update; mushy bits mean the payload's detail did
+  // not survive the optics.
+  // Only meaningful when a four-level frame was sampled: the four reference
+  // brightnesses the timing ring actually delivered, and the narrowest gap
+  // between neighbours. Below roughly 20 the levels are too close to separate.
+  $('dLevels').textContent = d.levelRefs
+    ? `${d.levelRefs.join(' / ')}  间隔 ${Math.round(d.levelGap)}` +
+      (d.levelGap < 20 ? '  ← 电平太挤' : '')
+    : '—';
+
+  const m = d.margin;
+  $('dMargin').textContent = m === null ? '—' : `${(m * 100).toFixed(0)}%`;
+  if (seen && t.crcFails > seen * 0.4 && m !== null && goodFps < 4) {
+    $('dMargin').textContent += m >= 0.95 ? '  ← 拍到切帧，缩短曝光' : '  ← 载荷太糊，靠近或降密度';
+  }
+
+  const corners = lastHit ? lastHit.corners : scanner.corners;
+  if (corners) {
+    const span = quadSpan(corners);
+    const n = lastHit ? lastHit.gridSize : scanner.locked;
+    $('dPpm').textContent = n ? `${span.toFixed(0)} px / ${(span / n).toFixed(1)} px` : `${span.toFixed(0)} px / —`;
+  } else {
+    $('dPpm').textContent = '—';
+  }
+}
+
+function finish() {
+  running = false;
+  generation++;
+  stopCamera();
+  result = receiver.result;
+  saved = false;
+  render();
+  $('bar').classList.add('done');
+  $('view').style.display = 'none';
+  $('donePanel').style.display = 'block';
+
+  const alert = $('doneAlert');
+  alert.className = 'alert ' + (result.verified ? 'ok' : 'bad');
+  alert.querySelector('b').textContent = result.verified ? '传输完成，校验通过' : '校验失败';
+  $('doneText').textContent = result.verified
+    ? `${result.name} · ${fmtBytes(result.bytes.length)} · SHA-256 与发送端一致。`
+    : '文件已重组，但 SHA-256 与发送端声明的不一致，内容不可信。';
+  $('doneHash').textContent = 'SHA-256 ' + result.sha256;
+  $('save').disabled = false;
+}
+
+$('start').addEventListener('click', start);
+
+/**
+ * Every way back to the start page goes through here, and each one asks first
+ * when it would throw work away: symbols already accepted mid-transfer, or a
+ * finished file that has not been saved yet. Both are unrecoverable — the
+ * channel is one-way, so nothing can be asked for a second time.
+ */
+function askReset(question) {
+  if (question && !confirm(question)) return;
+  resetToStart();
+}
+
+const abandon = () =>
+  askReset(receiver && receiver.stats.valid > 0
+    ? '返回起始页会清空已接收的 ' + receiver.stats.valid + ' 个编码块，需要重新接收。确定？'
+    : null);
+
+$('backProgress').addEventListener('click', abandon);
+$('backLive').addEventListener('click', abandon);
+$('again').addEventListener('click', () =>
+  askReset(result && !saved ? '文件还没有保存，返回起始页后就没有了。确定？' : null));
+/**
+ * Inside the Android shell the bytes go through a bridge instead of a blob:
+ * URL — WebView cannot download blob: URLs, so the browser path silently does
+ * nothing there. Chunked, and each chunk is a multiple of 3 bytes so no base64
+ * padding lands mid-stream.
+ */
+function saveNative(bytes, name, mime) {
+  window.VdtpNative.saveBegin(name, mime);
+  const CHUNK = 48 * 1024;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const slice = bytes.subarray(i, i + CHUNK);
+    let s = '';
+    for (let j = 0; j < slice.length; j++) s += String.fromCharCode(slice[j]);
+    window.VdtpNative.saveChunk(btoa(s));
+  }
+  window.VdtpNative.saveEnd();
+}
+
+function saveBrowser(bytes, name, mime) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+$('save').addEventListener('click', () => {
+  if (!result) return;
+  const name = result.name || 'vdtp-file.bin';
+  const mime = result.mime || 'application/octet-stream';
+  if (window.VdtpNative && window.VdtpNative.saveBegin) saveNative(result.bytes, name, mime);
+  else saveBrowser(result.bytes, name, mime);
+  saved = true;
+});
+</script>
+</body>
+</html>
